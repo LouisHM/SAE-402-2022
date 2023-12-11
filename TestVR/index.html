@@ -1,0 +1,974 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/x-icon" href="./assets/favicon.png">
+    <title>Test VR</title>
+</head>
+<body>
+
+    <script async src="https://unpkg.com/es-module-shims@1.6.3/dist/es-module-shims.js"></script>
+
+    <script type="importmap">
+        {
+          "imports": {
+            "three": "./node_modules/three/build/three.module.js",
+            "three/addons/": "./node_modules/three/examples/jsm/"
+          }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
+        import { BoxLineGeometry } from 'three/addons/geometries/BoxLineGeometry.js';
+        import { VRButton } from 'three/addons/webxr/VRButton.js';
+        import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+        import { FontLoader } from 'three/addons/loaders/FontLoader.js';
+        import { TextGeometry } from 'three/addons/geometries/TextGeometry.js';
+
+        let camera, scene, renderer, raycasterOne, raycasterTwo, labelRenderer, group;
+        let hand1, hand2;
+        let controller1, controller2;
+        let controllerGrip1, controllerGrip2;
+        let geometry, material;
+        let inventory = [];
+
+
+        //let controls;
+
+        let room, roomSize, marker, floor, baseReferenceSpace, baseStart, maze;
+
+        let font, textGeo;
+
+        let plastic, wood, organic, metal;
+        let junk;
+        
+
+        let INTERSECTION;
+        const tempMatrix = new THREE.Matrix4();
+
+        init();
+        animate();
+        function init() { 
+
+            createScene();
+            createSceneFloor();
+            createRenderer();
+
+            createCamera();
+            createLights();
+            createRoom();
+
+            createMouseControls();
+            createVRControls();
+            createMarker();
+
+            createLabyrinth();
+            createLabyrinthFloor();
+
+            createTowers();
+
+            createCollectables();
+
+            createProps(); 
+            startText();
+            playSound('./assets/sounds/bgNoise.mp3')
+            
+        }
+
+        function render() {
+            INTERSECTION = undefined;
+
+            // intersectObjects( controller2 );
+
+            function updateSelectedObjectPositionAndOrientation( controller ) {
+                controller.userData.selectedObject.position.copy( controller.position );
+                controller.userData.selectedObject.position.sub( controller.userData.offset );
+                controller.userData.selectedObject.quaternion.copy( controller.quaternion );
+            }
+
+            if ( controller1.userData.isSelecting === true ) {
+                tempMatrix.identity().extractRotation( controller1.matrixWorld );
+
+                raycasterOne.ray.origin.setFromMatrixPosition( controller1.matrixWorld );
+				raycasterOne.ray.direction.set( 0, 0, - 1 ).applyMatrix4( tempMatrix );
+
+                const intersects = raycasterOne.intersectObjects( [ floor ] );
+                // const intersects = raycaster.intersectObjects( maze, true );
+                if ( intersects.length > 0 ) {
+                    INTERSECTION = intersects[ 0 ].point;
+                }
+
+            }
+
+            // if ( controller2.userData.isSelecting === true ) {
+            //     tempMatrix.identity().extractRotation( controller2.matrixWorld );
+
+            //     raycasterTwo.ray.origin.setFromMatrixPosition( controller2.matrixWorld );
+			// 	raycasterTwo.ray.direction.set( 0, 0, - 1 ).applyMatrix4( tempMatrix );
+
+            //     const intersects = raycasterTwo.intersectObjects( scene.children );
+            //     // const intersects = raycaster.intersectObjects( maze, true );
+            //     if ( intersects.length > 0 ) {
+            //         INTERACTION = intersects[ 0 ].point;
+            //     }
+
+            // }
+
+            // if ( controller2.userData.selectedObject ) {
+            //     updateSelectedObjectPositionAndOrientation( controller2 );
+            // }
+
+            if ( INTERSECTION ){
+                marker.position.copy( INTERSECTION );
+            }
+
+            marker.visible = INTERSECTION !== undefined;
+            
+            renderer.render( scene, camera );
+
+            // renderer.vr.enabled = true;
+
+            // renderer.vr.setAnimationLoop( animate );
+
+        }
+
+        function animate() {
+
+            renderer.setAnimationLoop( render );
+
+            //controls.update();
+
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+
+            renderer.setSize( window.innerWidth, window.innerHeight );
+
+        }
+
+        function createScene() {
+             // Défini la scène
+             scene = new THREE.Scene();
+            // scene.background = new THREE.Color( 0x505050 );
+            new RGBELoader()
+                .setPath('./assets/background/')
+                .load( 'background2.hdr', function ( texture ) {
+                    texture.mapping = THREE.EquirectangularReflectionMapping;
+
+                    scene.background = texture;
+                    scene.environment = texture;
+
+                    render();
+            });
+        }
+
+        function createSceneFloor() {
+            // Défini le sol de la scène (n'influe pas avec les collisions)
+            const floorPiece = new THREE.Mesh(
+                new THREE.PlaneGeometry( 100, 100, 2, 2 ).rotateX( - Math.PI / 2 ),
+                new THREE.MeshBasicMaterial( { color: 0x1c2129})
+            );
+            floorPiece.position.y = -7.1;
+            scene.add( floorPiece );
+        }
+
+        function createRenderer() {
+            // RENDER
+            renderer = new THREE.WebGLRenderer( { antialias: true, alpha: false } );
+            renderer.setPixelRatio( window.devicePixelRatio );
+            renderer.setSize( window.innerWidth, window.innerHeight );
+            renderer.outputEncoding = THREE.sRGBEncoding;
+            renderer.shadowMap.enabled = true;
+            renderer.xr.addEventListener( 'sessionstart', () => baseReferenceSpace = renderer.xr.getReferenceSpace() );
+            renderer.xr.enabled = true;
+            document.body.appendChild( renderer.domElement );
+            document.body.appendChild( VRButton.createButton( renderer ) );
+        }
+
+        function createCamera() {
+            // Défini les caméras
+            camera = new THREE.PerspectiveCamera( 50, window.innerWidth / window.innerHeight, 0.1, 2000 );
+            camera.position.set( 0, 0, 0 );
+            camera.lookAt(new THREE.Vector3(-3,-3,-3));
+        }
+
+        function createRoom() {
+            // Défini la pièce
+            roomSize = 45
+            room = new THREE.LineSegments(
+                new BoxLineGeometry( roomSize + 1, 20, roomSize, 1, 1, 1).translate(0, 3, 0),
+                new THREE.LineBasicMaterial( { color: 0xff0000, opacity: 0, transparent: true})
+            )
+            scene.add( room );
+        }
+
+        function createLights() {
+            // Défini les lumière de la sphère
+            scene.add( new THREE.HemisphereLight( 0x606060, 0x404040 ) ); 
+
+            // Défini les lumières
+            const dl1 = new THREE.DirectionalLight(0xcccccc, 0.8);
+            dl1.position.set(10, 50, 10);
+            const dl1Hepler = new THREE.DirectionalLightHelper(dl1, 3);
+            scene.add(dl1)
+
+            const dl2 = new THREE.DirectionalLight(0xcccccc, 0.3);
+            dl2.position.set(-10, 50, -10);
+            const dl2Hepler = new THREE.DirectionalLightHelper(dl2, 3);
+            scene.add(dl2)
+        }
+
+        function createMouseControls() {
+            // Ajout Controls
+            labelRenderer = new CSS2DRenderer();
+            labelRenderer.setSize( window.innerWidth, window.innerHeight );
+            labelRenderer.domElement.style.position = 'absolute';
+            labelRenderer.domElement.style.top = '0px';
+            document.body.appendChild( labelRenderer.domElement );
+            const controls = new OrbitControls( camera, labelRenderer.domElement );
+            controls.minDistance = 5;
+            controls.maxDistance = 100;
+        }
+
+        function createVRControls() {
+            // Défini les Raycaster
+            raycasterOne = new THREE.Raycaster();
+            raycasterTwo = new THREE.Raycaster();
+
+            function getIntersections( controller ) {
+
+                tempMatrix.identity().extractRotation( controller.matrixWorld );
+
+                raycasterTwo.ray.origin.setFromMatrixPosition( controller.matrixWorld );
+                raycasterTwo.ray.direction.set( 0, 0, - 1 ).applyMatrix4( tempMatrix );
+
+                return raycasterTwo.intersectObjects( group.children, false );
+
+            }
+
+            function intersectObjects( controller ) {
+
+                // Do not highlight when already selected
+
+                if ( controller.userData.selected !== undefined ) return;
+
+                    const line = controller.getObjectByName( 'line' );
+                    const intersections = getIntersections( controller );
+
+                    if ( intersections.length > 0 ) {
+
+                        const intersection = intersections[ 0 ];
+
+                        const object = intersection.object;
+                        object.material.emissive.r = 1;
+                        intersected.push( object );
+
+                        line.scale.z = intersection.distance;
+
+                    } else {
+
+                    line.scale.z = 5;
+
+                }
+
+            }
+
+            // CONTROLLERS
+            function onSelectStartOne() {
+                this.userData.isSelecting = true;
+            }
+
+            function onSelectStartTwo( event ) {
+                this.userData.isSelecting = true;
+
+                const controller = event.target;
+
+				const intersections = getIntersections( controller );
+
+				if ( intersections.length > 0 ) {
+
+					const intersection = intersections[ 0 ];
+
+					const object = intersection.object;
+                    scene.remove(object);
+                    group.remove(object);
+                    object.visible = false;
+					controller.userData.selected = object;
+
+				}
+            }
+
+            function onSelectEndOne() {
+                this.userData.isSelecting = false;
+                if ( INTERSECTION ) {
+                    const offsetPosition = { x: - INTERSECTION.x, y: - INTERSECTION.y, z: - INTERSECTION.z, w: 1 };
+                    const offsetRotation = new THREE.Quaternion();
+                    const transform = new XRRigidTransform( offsetPosition, offsetRotation );
+                    const teleportSpaceOffset = baseReferenceSpace.getOffsetReferenceSpace( transform );
+                    renderer.xr.setReferenceSpace( teleportSpaceOffset );
+                    playSound('./assets/sounds/Appear_Electric 01.wav');
+                }
+            }
+
+            function onSelectEndTwo(event) {
+                this.userData.isSelecting = false;
+
+                const controller = event.target;
+
+				if ( controller.userData.selected !== undefined ) {
+
+					const object = controller.userData.selected;
+                    inventory.push(object.name);
+                    scene.remove(object);
+                    group.remove(object);
+                    object.visible = false;
+					controller.userData.selected = undefined;
+                    createTowers();
+                    console.log(inventory)
+
+				}
+            }
+
+            controller1 = renderer.xr.getController( 0 );
+            controller1.addEventListener( 'selectstart', onSelectStartOne );
+            controller1.addEventListener( 'selectend', onSelectEndOne );
+            controller1.addEventListener( 'connected', function ( event ) {
+                this.add( buildController( event.data ) );
+            } );
+
+            controller1.addEventListener( 'disconnected', function () {
+                this.remove( this.children[ 0 ] );
+            } );
+            scene.add( controller1 );
+
+            controller2 = renderer.xr.getController( 1 );
+            controller2.addEventListener( 'selectstart', onSelectStartTwo );
+            controller2.addEventListener( 'selectend', onSelectEndTwo );
+            controller2.addEventListener( 'connected', function ( event ) {
+                this.add( buildController( event.data ) );
+            } );
+
+            controller2.addEventListener( 'disconnected', function () {
+                this.remove( this.children[ 0 ] );
+            } );
+            scene.add( controller2 );
+
+			const controllerModelFactory = new XRControllerModelFactory();
+
+            controllerGrip1 = renderer.xr.getControllerGrip( 0 );
+            controllerGrip1.add( controllerModelFactory.createControllerModel( controllerGrip1 ) );
+            scene.add( controllerGrip1 );
+
+            controllerGrip2 = renderer.xr.getControllerGrip( 1 );
+            controllerGrip2.add( controllerModelFactory.createControllerModel( controllerGrip2 ) );
+            scene.add( controllerGrip2 );
+
+            //
+
+            window.addEventListener( 'resize', onWindowResize, false );
+
+            function buildController( data ) {
+            switch ( data.targetRayMode ) {
+                    case 'tracked-pointer':
+                        geometry = new THREE.BufferGeometry();
+                        geometry.setAttribute( 'position', new THREE.Float32BufferAttribute( [ 0, 0, 0, 0, 0, - 1 ], 3 ) );
+                        geometry.setAttribute( 'color', new THREE.Float32BufferAttribute( [ 0.5, 0.5, 0.5, 0, 0, 0 ], 3 ) );
+                        material = new THREE.LineBasicMaterial( { vertexColors: true, blending: THREE.AdditiveBlending } );
+                        return new THREE.Line( geometry, material );
+
+                    case 'gaze':
+                        geometry = new THREE.RingGeometry( 0.02, 0.04, 32 ).translate( 0, 0, - 1 );
+                        material = new THREE.MeshBasicMaterial( { opacity: 0.5, transparent: true } );
+                        return new THREE.Mesh( geometry, material );
+                }
+
+        }
+        }
+
+        function createMarker() {
+            // Défini le marker
+            marker = new THREE.Mesh(
+                new THREE.CircleGeometry( 0.25, 32 ).rotateX( - Math.PI / 2 ),
+                new THREE.MeshBasicMaterial( { color: 0xff0000 } )
+            );
+            scene.add( marker );
+        }
+
+        function createLabyrinth() {
+            // Défini le labyrinthe
+            maze = new GLTFLoader();
+            maze.load("./assets/maze/maze3.gltf", function (gltf) {
+                const model = gltf.scene;
+                gltf.scene.scale.set(1,1,1);
+                
+                // const material = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+                // model.traverse(function(child) {
+                //     if (child.isMesh) {
+                //         child.material = material;
+                //         child.castShadow = true;
+                //         child.receiveShadow = true;
+                //         child.geometry.computeVertexNormals();
+                //         child.renderOrder = 0;
+
+                //         const box = new THREE.Box3().setFromObject( child );
+                //         const center = box.getCenter( new THREE.Vector3() );
+                //         child.position.x += ( child.position.x - center.x );
+                //         child.position.y = - 2;
+                //         child.position.z += ( child.position.z - center.z );
+
+                //         scene.add(child);
+                //     }
+                // });
+                
+                // CENTRER L'OBJET A PARTIR DU MILIEU
+                const box = new THREE.Box3().setFromObject( gltf.scene );
+                const center = box.getCenter( new THREE.Vector3() );
+                gltf.scene.position.x += ( gltf.scene.position.x - center.x );
+                gltf.scene.position.y = - 7;
+                gltf.scene.position.z += ( gltf.scene.position.z - center.z );
+
+                scene.add(model);
+            }, undefined, function ( error ) {
+                console.error( error );
+            } );
+        }
+
+        function createLabyrinthFloor() {
+            const floorTexture = new THREE.TextureLoader().load( 'assets/floor.jpg' )
+            floor = new THREE.Mesh(
+                new THREE.PlaneGeometry( roomSize + 1, roomSize, 2, 2 ).rotateX( - Math.PI / 2 ),
+                new THREE.MeshBasicMaterial( { map: floorTexture } ),
+                
+            );
+            floor.position.y = -7;
+            scene.add( floor );
+        }
+
+        function createTowers() {
+            // TOURS 
+            let materialVerre = undefined
+            let materialMetaux = undefined
+            let materialCartons = undefined
+            let materialPlastique = undefined
+            let plastique = undefined
+            let verre = undefined
+            let metaux = undefined
+            let cartons = undefined
+            let nbPlastic = 0
+            let nbOrganic = 0
+            let nbWood = 0
+            let nbMetal = 0
+
+            
+
+            const forme = new THREE.BoxGeometry( 3, 15, 3 ).translate(0, 8, 0);
+            const forme2 = new THREE.BoxGeometry( 3, 20, 3 ).translate(0, 8, 0);
+
+            if (inventory.length === 0) {
+                // materialVerre = new THREE.MeshBasicMaterial( {color: 0x26422c} );
+                // materialMetaux = new THREE.MeshBasicMaterial( {color: 0xa5adab} );
+                // materialCartons = new THREE.MeshBasicMaterial( {color: 0x917d2c} );
+                // materialPlastique = new THREE.MeshBasicMaterial( {color: 0x1339eb} );
+            }
+            else if (inventory.length !== 0) {
+                for (const elt of inventory) {
+                    if (elt == "plastic") {
+                        nbPlastic += 1    
+                    }
+                    else if (elt == "organic") {
+                        nbOrganic += 1    
+                    }
+                    else if (elt == "metal") {
+                        nbMetal += 1    
+                    }
+                    else if (elt == "wood") {
+                        nbWood += 1    
+                    }
+                }
+
+                if (nbPlastic == 1) {
+                    materialPlastique = new THREE.MeshBasicMaterial( {color: 0xffffff} ); 
+                    // Plastique
+                    plastique = new THREE.Mesh( forme, materialPlastique );
+                    plastique.position.x = - 26 
+                    plastique.position.y = - 5 
+                    plastique.position.z = - 25
+                    scene.add( plastique );
+                    playSound('./assets/sounds/Move_Rubber 08.wav')
+
+                    // TEXTE
+                    createText('Plastic 50%', - 25, 5, -20, 0, 0.25);    
+                }
+                else if (nbPlastic == 2) {
+                    materialPlastique = new THREE.MeshBasicMaterial( {color: 0x4287f5} ); 
+                    // Plastique
+                    plastique = new THREE.Mesh( forme2, materialPlastique );
+                    plastique.position.x = - 26 
+                    plastique.position.y = - 5 
+                    plastique.position.z = - 25
+                    scene.add( plastique );
+                    playSound('./assets/sounds/Move_Rubber 08.wav')
+                    playSound('./assets/sounds/Validate 01.wav')
+
+                    // TEXTE
+                    createText('Plastic 100%', - 25, 10, -20, 0, 0.25);    
+                }
+
+                if (nbMetal == 1) {
+                    materialMetaux = new THREE.MeshBasicMaterial( {color: 0xffffff} );
+                    // Métaux
+                    const metaux = new THREE.Mesh( forme, materialMetaux );
+                    metaux.position.x = 26 
+                    metaux.position.y = - 5
+                    metaux.position.z = - 25
+                    scene.add( metaux );
+                    playSound('./assets/sounds/Transform_Metal 04.wav')
+                    // TEXTE
+                    createText('Metal 50%', 17, 5, - 21.5, 0, 1.75);   
+                }
+                else if (nbMetal == 2) {
+                    materialMetaux = new THREE.MeshBasicMaterial( {color: 0x9c9c9c} );
+                    // Métaux
+                    const metaux = new THREE.Mesh( forme2, materialMetaux );
+                    metaux.position.x = 26 
+                    metaux.position.y = - 5
+                    metaux.position.z = - 25
+                    scene.add( metaux );
+                    
+                    playSound('./assets/sounds/Transform_Metal 04.wav')
+                    playSound('./assets/sounds/Validate 01.wav')
+                    // TEXTE
+                    createText('Metal 100%', 17, 10, - 21.5, 0, 1.75);     
+                }
+
+                if (nbWood == 1) {
+                    materialCartons = new THREE.MeshBasicMaterial( {color: 0xffffff} );
+                    // Cartons
+                    const cartons = new THREE.Mesh( forme, materialCartons );
+                    cartons.position.x = - 26 
+                    cartons.position.y = - 5
+                    cartons.position.z = 25
+                    scene.add( cartons );
+                    playSound('./assets/sounds/Merge_Wood 04.wav')
+                    
+                    // TEXTE
+                    createText('Wood 50%', - 23, 5, 23, 0, 0.75);  
+                }
+                else if (nbWood == 2) {
+                    materialCartons = new THREE.MeshBasicMaterial( {color: 0xd18f00} );
+                    // Cartons
+                    const cartons = new THREE.Mesh( forme2, materialCartons );
+                    cartons.position.x = - 26 
+                    cartons.position.y = - 5
+                    cartons.position.z = 25
+                    scene.add( cartons );
+                    playSound('./assets/sounds/Merge_Wood 04.wav')
+                    playSound('./assets/sounds/Validate 01.wav')
+                    // TEXTE
+                    createText('Wood 100%', - 23, 10, 23, 0, 0.75);     
+                }
+
+                if (nbOrganic == 1) {
+                    materialVerre = new THREE.MeshBasicMaterial( {color: 0xffffff} );
+                    // Organic
+                    const verre = new THREE.Mesh( forme, materialVerre );
+                    verre.position.x = 26 
+                    verre.position.y = - 5
+                    verre.position.z = 25
+                    scene.add( verre );
+                    playSound('./assets/sounds/Scale_Organic 01.wav')
+
+                    // TEXTE
+                    createText('Organic 50%', 21, 5, 20, 0, 1.25);  
+                }
+                else if (nbOrganic == 2) {
+                    materialVerre = new THREE.MeshBasicMaterial( {color: 0x00e353} );
+                    // Organic
+                    const verre = new THREE.Mesh( forme2, materialVerre );
+                    verre.position.x = 26 
+                    verre.position.y = - 5
+                    verre.position.z = 25
+                    scene.add( verre );
+                    playSound('./assets/sounds/Scale_Organic 01.wav')
+                    playSound('./assets/sounds/Validate 01.wav')
+
+                    // TEXTE
+                    createText('Organic 100%', 21, 10, 20, 0, 1.25);     
+                }
+
+            }
+            
+        }
+
+        function createProps() {
+            const plasticBin = new GLTFLoader();
+            plasticBin.load("./assets/benne.glb", function (glb) {
+                const model = glb.scene;
+                glb.scene.scale.set(1,1,1);
+                // CENTRER L'OBJET A PARTIR DU MILIEU
+                // glb.scene.rotateY(380)
+                const box = new THREE.Box3().setFromObject( glb.scene );
+                const center = box.getCenter( new THREE.Vector3() );
+                glb.scene.position.x += ( glb.scene.position.x - center.x ) -21.5 ;
+                glb.scene.position.y = -6;
+                glb.scene.position.z += ( glb.scene.position.z - center.z ) +21;
+
+                glb.scene.rotation.y = 3.15;
+                scene.add(model);
+            }, undefined, function ( error ) {
+                console.error( error );
+            } );
+            const metalBin = new GLTFLoader();
+            metalBin.load("./assets/benne.glb", function (glb) {
+                const model = glb.scene;
+                glb.scene.scale.set(1,1,1);
+                // CENTRER L'OBJET A PARTIR DU MILIEU
+                // glb.scene.rotateY(380)
+                const box = new THREE.Box3().setFromObject( glb.scene );
+                const center = box.getCenter( new THREE.Vector3() );
+                glb.scene.position.x += ( glb.scene.position.x - center.x ) + 21.5 ;
+                glb.scene.position.y = -6;
+                glb.scene.position.z += ( glb.scene.position.z - center.z ) +21;
+
+                glb.scene.rotation.y = 3.15;
+                scene.add(model);
+            }, undefined, function ( error ) {
+                console.error( error );
+            } );
+            const woodBin = new GLTFLoader();
+            woodBin.load("./assets/benne.glb", function (glb) {
+                const model = glb.scene;
+                glb.scene.scale.set(1,1,1);
+                // CENTRER L'OBJET A PARTIR DU MILIEU
+                // glb.scene.rotateY(380)
+                const box = new THREE.Box3().setFromObject( glb.scene );
+                const center = box.getCenter( new THREE.Vector3() );
+                glb.scene.position.x += ( glb.scene.position.x - center.x ) -21.5 ;
+                glb.scene.position.y = -6;
+                glb.scene.position.z += ( glb.scene.position.z - center.z ) - 21;
+                scene.add(model);
+            }, undefined, function ( error ) {
+                console.error( error );
+            } );
+            const organicBin = new GLTFLoader();
+            organicBin.load("./assets/benne.glb", function (glb) {
+                const model = glb.scene;
+                glb.scene.scale.set(1,1,1);
+                // CENTRER L'OBJET A PARTIR DU MILIEU
+                // glb.scene.rotateY(380)
+                const box = new THREE.Box3().setFromObject( glb.scene );
+                const center = box.getCenter( new THREE.Vector3() );
+                glb.scene.position.x += ( glb.scene.position.x - center.x ) + 21.5 ;
+                glb.scene.position.y = -6;
+                glb.scene.position.z += ( glb.scene.position.z - center.z ) - 21;
+                scene.add(model);
+            }, undefined, function ( error ) {
+                console.error( error );
+            } );
+        }
+
+        function createText(message, x, y, z, rotationX, rotationY) {
+
+            const loader = new FontLoader();
+
+            loader.load( './node_modules/three/examples/fonts/helvetiker_regular.typeface.json', function ( response ) {
+                font = response;
+
+                let materials = [
+                    new THREE.MeshPhongMaterial( { color: 0xffffff, flatShading: true } ), // front
+                    new THREE.MeshPhongMaterial( { color: 0xffffff } ) // side
+                ];
+
+                // let materials = [ new THREE.MeshPhongMaterial( { color: 0xffffff, flatShading: true } ) ];
+
+                textGeo = new TextGeometry( message, {
+
+                    font: font,
+                    size: 1,
+                    height: 0.5,
+                    // curveSegments: 5,
+                    // bevelThickness: 1,
+                    // bevelSize: 1.5,
+                    // bevelEnabled: false,
+
+                } );
+
+                textGeo.computeBoundingBox();
+                const centerOffset = - 0.5 * ( textGeo.boundingBox.max.x - textGeo.boundingBox.min.x );
+
+                const textMesh1 = new THREE.Mesh( textGeo, materials);
+                textMesh1.position.x = x - centerOffset;
+                textMesh1.position.y = y;
+                textMesh1.position.z = z;
+
+                textMesh1.rotation.x = rotationX;
+                textMesh1.rotation.y = Math.PI * rotationY; // Math.PI * 2 par defaut
+
+                scene.add( textMesh1 );
+
+                const position = new THREE.Vector3();
+
+                position.setFromMatrixPosition(camera.matrixWorld); // donne la position de la caméra
+
+            })
+        };
+        
+        function createCollectables(){
+            group = new THREE.Group();
+			scene.add( group );
+            let metalTexture = new THREE.TextureLoader().load( './assets/props/metal.png' );
+            let organicTexture = new THREE.TextureLoader().load( './assets/props/organic.png' );
+            let plasticTexture = new THREE.TextureLoader().load( './assets/props/plastic.png' );
+            let woodTexture = new THREE.TextureLoader().load( './assets/props/wood.png' );
+
+            var cubeGeometry = new THREE.BoxGeometry( 1, 1, 1 );
+            var cubeMaterial = new THREE.MeshLambertMaterial( { color: 0xff0000 } );
+            var woodMaterial = [
+                new THREE.MeshBasicMaterial( { map: woodTexture } ),
+                new THREE.MeshBasicMaterial( { map: woodTexture } ),
+                new THREE.MeshBasicMaterial( { map: woodTexture } ),
+                new THREE.MeshBasicMaterial( { map: woodTexture } ),
+                new THREE.MeshBasicMaterial( { map: woodTexture } ),
+                new THREE.MeshBasicMaterial( { map: woodTexture } )
+            ];
+            var organicMaterial = [
+                new THREE.MeshBasicMaterial( { map: organicTexture } ),
+                new THREE.MeshBasicMaterial( { map: organicTexture } ),
+                new THREE.MeshBasicMaterial( { map: organicTexture } ),
+                new THREE.MeshBasicMaterial( { map: organicTexture } ),
+                new THREE.MeshBasicMaterial( { map: organicTexture } ),
+                new THREE.MeshBasicMaterial( { map: organicTexture } )
+            ];
+            var plasticMaterial = [
+                new THREE.MeshBasicMaterial( { map: plasticTexture } ),
+                new THREE.MeshBasicMaterial( { map: plasticTexture } ),
+                new THREE.MeshBasicMaterial( { map: plasticTexture } ),
+                new THREE.MeshBasicMaterial( { map: plasticTexture } ),
+                new THREE.MeshBasicMaterial( { map: plasticTexture } ),
+                new THREE.MeshBasicMaterial( { map: plasticTexture } )
+            ];
+            var metalMaterial = [
+                new THREE.MeshBasicMaterial( { map: metalTexture } ),
+                new THREE.MeshBasicMaterial( { map: metalTexture } ),
+                new THREE.MeshBasicMaterial( { map: metalTexture } ),
+                new THREE.MeshBasicMaterial( { map: metalTexture } ),
+                new THREE.MeshBasicMaterial( { map: metalTexture } ),
+                new THREE.MeshBasicMaterial( { map: metalTexture } )
+            ];
+
+            var cubePlastique1 = new THREE.Mesh( cubeGeometry, plasticMaterial );
+            cubePlastique1.position.set( 1.75, -6, -21 );
+            cubePlastique1.userData.isGrabbed = false;
+            cubePlastique1.userData.id = 'cubePlastique1';
+            cubePlastique1.name ="plastic";
+            group.add( cubePlastique1 )
+
+
+            var cubePlastique2 = new THREE.Mesh( cubeGeometry, plasticMaterial );
+            cubePlastique2.position.set( 0.75, -6, 21 );
+            cubePlastique2.userData.isGrabbed = false;
+            cubePlastique2.userData.id = 'cubePlastique2';
+            cubePlastique2.name ="plastic";
+            group.add( cubePlastique2 )
+
+            var cubeOrganic1 = new THREE.Mesh( cubeGeometry, organicMaterial );
+            cubeOrganic1.position.set( -10, -6, 21 );
+            cubeOrganic1.userData.isGrabbed = false;
+            cubeOrganic1.userData.id = 'cubeOrganic1';
+            cubeOrganic1.name ="organic";
+            group.add( cubeOrganic1 )
+
+            var cubeOrganic2 = new THREE.Mesh( cubeGeometry, organicMaterial );
+            cubeOrganic2.position.set( -17, -6, -3.8 );
+            cubeOrganic2.userData.isGrabbed = false;
+            cubeOrganic2.userData.id = 'cubeorganic2';
+            cubeOrganic2.name ="organic";
+            group.add( cubeOrganic2 )
+
+            var cubeCartons1 = new THREE.Mesh( cubeGeometry, woodMaterial );
+            cubeCartons1.position.set( 16, -6, -2 );
+            cubeCartons1.userData.isGrabbed = false;
+            cubeCartons1.userData.id = 'cubeCartons1';
+            cubeCartons1.name ="wood";
+            group.add( cubeCartons1 )
+
+            var cubeCartons2 = new THREE.Mesh( cubeGeometry, woodMaterial );
+            cubeCartons2.position.set( -16, -6, -17.5 );
+            cubeCartons2.userData.isGrabbed = false;
+            cubeCartons2.userData.id = 'cubeCartons2';
+            cubeCartons2.name ="wood";
+            group.add( cubeCartons2 )
+
+            var cubeMetaux1 = new THREE.Mesh( cubeGeometry, metalMaterial );
+            cubeMetaux1.position.set( 11.5, -6, 12 );
+            cubeMetaux1.userData.isGrabbed = false;
+            cubeMetaux1.userData.id = 'cubeMetaux1';
+            cubeMetaux1.name ="metal";
+            group.add( cubeMetaux1 )
+
+            var cubeMetaux2 = new THREE.Mesh( cubeGeometry, metalMaterial );
+            cubeMetaux2.position.set( -2.75, -6, -12 );
+            cubeMetaux2.userData.isGrabbed = false;
+            cubeMetaux2.userData.id = 'cubeMetaux2';
+            cubeMetaux2.name ="metal";
+            group.add( cubeMetaux2 )
+        }
+        // ajouter des sons (téléportation, 8 bits)
+        // 
+        function startText() {
+            // createText('Start', -3, -6, -4, 0, 0)
+            const loader = new FontLoader();
+
+            loader.load( './node_modules/three/examples/fonts/helvetiker_regular.typeface.json', function ( response ) {
+                font = response;
+
+                let materials = [
+                    new THREE.MeshPhongMaterial( { color: 0xffffff, flatShading: true } )
+                ];
+
+                // let materials = [ new THREE.MeshPhongMaterial( { color: 0xffffff, flatShading: true } ) ];
+
+                textGeo = new TextGeometry( 'Teleport with your right hand controller', {
+
+                    font: font,
+                    size: 0.25,
+                    height: 0.5,
+                    // curveSegments: 5,
+                    // bevelThickness: 1,
+                    // bevelSize: 1.5,
+                    // bevelEnabled: false,
+
+                } );
+                textGeo.computeBoundingBox();
+                const centerOffset1 = - 0.5 * ( textGeo.boundingBox.max.x - textGeo.boundingBox.min.x );
+
+                const textMesh1 = new THREE.Mesh( textGeo, materials);
+                textMesh1.position.x = centerOffset1 ;
+                textMesh1.position.y = -5;
+                textMesh1.position.z =  -4.5;
+
+                textMesh1.rotation.x = 0;
+                textMesh1.rotation.y = Math.PI * 0; // Math.PI * 2 par defaut
+
+                scene.add( textMesh1 );
+            })
+
+            loader.load( './node_modules/three/examples/fonts/helvetiker_regular.typeface.json', function ( response ) {
+                font = response;
+
+                let materials = [
+                    new THREE.MeshPhongMaterial( { color: 0xffffff, flatShading: true } )
+                ];
+
+                textGeo = new TextGeometry( 'Grab objects with your left hand controller', {
+
+                font: font,
+                size: 0.25,
+                height: 0.5,
+                // curveSegments: 5,
+                // bevelThickness: 1,
+                // bevelSize: 1.5,
+                // bevelEnabled: false,
+
+                } );
+
+                textGeo.computeBoundingBox();
+                const centerOffset2 = - 0.5 * ( textGeo.boundingBox.max.x - textGeo.boundingBox.min.x );
+
+                const textMesh2 = new THREE.Mesh( textGeo, materials);
+                textMesh2.position.x = centerOffset2 - 0.75;
+                textMesh2.position.y = -5;
+                textMesh2.position.z =  +3;
+
+                textMesh2.rotation.x = 0;
+                textMesh2.rotation.y = Math.PI * 0.5; // Math.PI * 2 par defaut
+
+                scene.add( textMesh2 );
+            })
+
+            loader.load( './node_modules/three/examples/fonts/helvetiker_regular.typeface.json', function ( response ) {
+                font = response;
+
+                let materials = [
+                    new THREE.MeshPhongMaterial( { color: 0xffffff, flatShading: true } )
+                ];
+
+                textGeo = new TextGeometry( 'Try to find each piece of garbage and their dumpster', {
+
+                font: font,
+                size: 0.25,
+                height: 0.5,
+                // curveSegments: 5,
+                // bevelThickness: 1,
+                // bevelSize: 1.5,
+                // bevelEnabled: false,
+
+                } );
+
+                textGeo.computeBoundingBox();
+                const centerOffset2 = - 0.5 * ( textGeo.boundingBox.max.x - textGeo.boundingBox.min.x );
+
+                const textMesh2 = new THREE.Mesh( textGeo, materials);
+                textMesh2.position.x = centerOffset2 + 7.75;
+                textMesh2.position.y = -5;
+                textMesh2.position.z =  -3;
+
+                textMesh2.rotation.x = 0;
+                textMesh2.rotation.y = Math.PI * -0.5; // Math.PI * 2 par defaut
+
+                scene.add( textMesh2 );
+            })
+        };
+
+        function playSound(url){
+            const audioListener = new THREE.AudioListener();
+
+            // add the listener to the camera
+            camera.add( audioListener );
+
+            // instantiate audio object
+            const oceanAmbientSound = new THREE.Audio( audioListener );
+
+            // add the audio object to the scene
+            scene.add( oceanAmbientSound );
+
+            const loader = new THREE.AudioLoader();
+
+            loader.load(
+                // resource URL
+                url,
+
+                // onLoad callback
+                function ( audioBuffer ) {
+                    // set the audio object buffer to the loaded object
+                    oceanAmbientSound.setBuffer( audioBuffer );
+
+                    // play the audio
+                    oceanAmbientSound.play();
+                },
+
+                // onProgress callback
+                function ( xhr ) {
+                    console.log( (xhr.loaded / xhr.total * 100) + '% loaded' );
+                },
+
+                // onError callback
+                function ( err ) {
+                    console.log( 'An error happened' );
+            }
+            );
+        }
+    </script>
+    
+</body>
+</html>
